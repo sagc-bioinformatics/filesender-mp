@@ -28,17 +28,6 @@
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-
-
-
-
-
-
-
-
-
-
-
 import argparse
 try:
     import requests
@@ -64,7 +53,6 @@ except Exception as e:
     print('')
     print('pip3 install requests urllib3 ')
     exit(1)
-
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -93,12 +81,13 @@ parser.add_argument("files", help="path to file(s) to send", nargs='+')
 parser.add_argument("-v", "--verbose", action="store_true")
 parser.add_argument("-i", "--insecure", action="store_true")
 parser.add_argument("-p", "--progress", action="store_true")
-parser.add_argument("-s", "--subject")
-parser.add_argument("-m", "--message")
+parser.add_argument("-s", "--subject", default="", type=str)
+parser.add_argument("-m", "--message", default="", type=str)
+parser.add_argument("-k", "--skip-email", action="store_true", default=False, help="Don't send email to recipient")
 parser.add_argument("-n", "--n_procs", default=1, type=int, help="number of parallel uploads")
-requiredNamed = parser.add_argument_group('required named arguments')
 
 # if we have found these in the config file they become optional arguments
+requiredNamed = parser.add_argument_group('required named arguments')
 if username is None:
     requiredNamed.add_argument("-u", "--username", required=True)
 else:
@@ -108,13 +97,23 @@ if apikey is None:
     requiredNamed.add_argument("-a", "--apikey", required=True)
 else:
     parser.add_argument("-a", "--apikey")
-
 requiredNamed.add_argument("-r", "--recipients", required=True)
+
+
+# final reporting logs
+parser.add_argument("--report", "-R", type=str, help="filepath for transfer report")
+# reporttype = parser.add_mutually_exclusive_group(required=True)
+parser.add_argument("--report-json", "-j", action="store_true", help="Output transfer report in JSON")
+parser.add_argument("--report-text", "-t", action="store_true", help="Output transfer report in text (default)")
+# parser.add_argument("--report-both", "-b", action="store_true", help="Report both JSON and txt formats")
+parser.add_argument("--quiet", "-q", action="store_true", help="Quiet mode. No report.")
+
 args = parser.parse_args()
 debug = args.verbose
 progress = args.progress
 insecure = args.insecure
 n_procs = args.n_procs
+skip_email = args.skip_email
 
 if args.username is not None:
     username = args.username
@@ -139,6 +138,43 @@ except requests.exceptions.SSLError as exc:
         response = requests.get(base_url+'/info', verify=False)
 upload_chunk_size = response.json()['upload_chunk_size']
 
+
+
+
+
+
+# test output
+write_to_stdout = True
+outprefix = None
+outdir = None
+if args.report:
+    outprefix = os.path.abspath(args.report)
+    outdir = os.path.dirname(outprefix)
+    try:
+        os.makedirs(outdir, exist_ok=True)
+        fout = open(outprefix+".test", "w")
+        fout.write("")
+        fout.close()
+        os.remove(outprefix + ".test")
+        write_to_stdout = False
+    except Exception as e:
+        print("""
+###########
+# WARNING #
+###########
+Unable to write output to specified location. Printing to stdout instead
+""")
+        outprefix = None
+        write_to_stdout = True
+
+WRITE_JSON = args.report_json
+WRITE_TEXT = args.report_text
+QUIET = args.quiet
+
+if not WRITE_JSON and not WRITE_TEXT:
+    WRITE_TEXT = True
+
+
 if debug:
     print('base_url          : '+base_url)
     print('username          : '+username)
@@ -147,9 +183,6 @@ if debug:
     print('recipients        : '+args.recipients)
     print('files             : '+','.join(args.files))
     print('insecure          : '+str(insecure))
-
-
-
 
 ##########################################################################
 
@@ -164,14 +197,12 @@ def flatten(d, parent_key=''):
     items.sort()
     return items
 
-
 def call(method, path, data, content=None, rawContent=None, options={}):
     data['remote_user'] = username
     data['timestamp'] = str(round(time.time()))
     flatdata = flatten(data)
     signed = bytes(method+'&'+base_url.replace('https://', '',
                    1).replace('http://', '', 1)+path+'?'+('&'.join(flatten(data))), 'ascii')
-
     content_type = options['Content-Type'] if 'Content-Type' in options else 'application/json'
 
     inputcontent = None
@@ -232,8 +263,12 @@ def call(method, path, data, content=None, rawContent=None, options={}):
 
 def postTransfer(user_id, files, recipients, subject=None, message=None, expires=None, options=[]):
 
+
+
     if expires is None:
         expires = round(time.time()) + (default_transfer_days_valid*24*3600)
+
+    print(expires)
 
     to = [x.strip() for x in recipients.split(',')]
 
@@ -334,7 +369,54 @@ def upload_file( fileobject, transferData, filesData, upload_chunk_size, debug):
     except Exception as e:
         raise(e)
 
+
+def transfer_data_to_text(tdata):
+    total_size = 0
+    for f in tdata["files"]:
+        total_size += f["size"]
+    size_unit = "Bytes"
+    if total_size > 1024**3:
+        size_unit = "GB"
+        total_size = total_size/(1024**3)
+    elif total_size > 1024**2:
+        size_unit = "MB"
+        total_size = total_size/(1024**2)
+    elif total_size > 1024:
+        size_unit = "kB"
+        total_size = total_size/(1024)
+    if size_unit == "Bytes":
+        size_str = f"{total_size} {size_unit}"
+    else:
+        size_str = f"{total_size:.2f} {size_unit}"
+
+    url = tdata["recipients"][0]["download_url"]
+    report_txt = f"""FileSender upload
+transfer ID: {tdata["id"]}
+uploaded by: {tdata["user_email"]}
+total size:  {size_str}
+
+recipient:   {tdata["recipients"][0]["email"]}
+D/L link:    {url}
+
+Files uploaded:
+"""
+
+    for fidx, f in enumerate(tdata["files"]):
+        url = f"https://filesender.aarnet.edu.au/download.php?token={tdata['recipients'][0]['token']}&files_ids={f['id']}"
+        ct_str = f"{fidx}".rjust( len(str(len(tdata["files"]))) )
+        report_txt += f"""
+{ct_str}: "{f["name"]}"
+{" "*len(ct_str)}  {f["size"]:,} bytes 
+{" "*len(ct_str)}  {url}&files_ids={f["id"]}
+"""
+
+    return report_txt
+
+
+
 ##########################################################################
+
+
 
 
 # postTransfer
@@ -355,8 +437,13 @@ for f in args.files:
     }
     filesTransfer.append({'name': fn, 'size': size})
 
-troptions = {'get_a_link': 0}
 
+
+
+troptions = {'get_a_link': skip_email}
+
+# sort by decreasing file size
+filesTransfer = sorted(filesTransfer, key=lambda x: x["size"], reverse=True)
 
 transfer = postTransfer(username,
                         filesTransfer,
@@ -366,6 +453,8 @@ transfer = postTransfer(username,
                         expires=None,
                         options=troptions)['created']
 # print(transfer)
+
+
 
 # ----------------------------------------------------------------------
 
@@ -386,7 +475,51 @@ pool.close()
 # transferComplete
 if debug:
     print('transferComplete')
-transferComplete(transfer)
+finalResponse = transferComplete(transfer)
 if progress:
     print('Upload Complete')
 
+
+
+
+
+if QUIET:
+    exit()
+
+
+if WRITE_TEXT:
+    report_text = transfer_data_to_text(finalResponse)
+
+    if outprefix:
+        fout = open(outprefix + ".txt", "w")
+        fout.write(report_text)
+        fout.close()
+    else:
+        print(f"""
+
+#-----------------------------
+# Text Report
+
+{report_text}              
+
+
+""")
+
+
+
+if WRITE_JSON:
+    if outprefix:
+        fout = open( outprefix + ".json", "w" )
+        fout.write( json.dumps(finalResponse) )
+        fout.close()
+    else:
+        print(f"""
+
+#-----------------------------
+# JSON Report
+
+{json.dumps(finalResponse, indent=1)}              
+
+
+""")
+    
