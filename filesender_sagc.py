@@ -43,6 +43,7 @@ try:
     from os.path import expanduser
     from multiprocessing import Pool
     from functools import partial
+    from string import Template
 except Exception as e:
     print(type(e))
     print(e.args)
@@ -53,136 +54,6 @@ except Exception as e:
     print('')
     print('pip3 install requests urllib3 ')
     exit(1)
-
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-# settings
-base_url = 'https://filesender.aarnet.edu.au/rest.php'
-default_transfer_days_valid = 21
-username = None
-apikey = None
-homepath = expanduser("~")
-
-config = configparser.ConfigParser()
-config.read(homepath + '/.filesender/filesender.py.ini')
-if 'system' in config:
-    base_url = config['system'].get(
-        'base_url', 'https://filesender.aarnet.edu.au/rest.php')
-    default_transfer_days_valid = int(
-        config['system'].get('default_transfer_days_valid', 10))
-if 'user' in config:
-    username = config['user'].get('username')
-    apikey = config['user'].get('apikey')
-
-
-# argv
-parser = argparse.ArgumentParser()
-parser.add_argument("files", help="path to file(s) to send", nargs='+')
-parser.add_argument("-v", "--verbose", action="store_true")
-parser.add_argument("-i", "--insecure", action="store_true")
-parser.add_argument("-p", "--progress", action="store_true")
-parser.add_argument("-s", "--subject", default="", type=str)
-parser.add_argument("-m", "--message", default="", type=str)
-parser.add_argument("-k", "--skip-email", action="store_true", default=False, help="Don't send email to recipient")
-parser.add_argument("-n", "--n_procs", default=1, type=int, help="number of parallel uploads")
-
-# if we have found these in the config file they become optional arguments
-requiredNamed = parser.add_argument_group('required named arguments')
-if username is None:
-    requiredNamed.add_argument("-u", "--username", required=True)
-else:
-    parser.add_argument("-u", "--username")
-
-if apikey is None:
-    requiredNamed.add_argument("-a", "--apikey", required=True)
-else:
-    parser.add_argument("-a", "--apikey")
-requiredNamed.add_argument("-r", "--recipients", required=True)
-
-
-# final reporting logs
-parser.add_argument("--report", "-R", type=str, help="filepath for transfer report")
-# reporttype = parser.add_mutually_exclusive_group(required=True)
-parser.add_argument("--report-json", "-j", action="store_true", help="Output transfer report in JSON")
-parser.add_argument("--report-text", "-t", action="store_true", help="Output transfer report in text (default)")
-# parser.add_argument("--report-both", "-b", action="store_true", help="Report both JSON and txt formats")
-parser.add_argument("--quiet", "-q", action="store_true", help="Quiet mode. No report.")
-
-args = parser.parse_args()
-debug = args.verbose
-progress = args.progress
-insecure = args.insecure
-n_procs = args.n_procs
-skip_email = args.skip_email
-
-if args.username is not None:
-    username = args.username
-
-if args.apikey is not None:
-    apikey = args.apikey
-
-
-# configs
-try:
-    response = requests.get(base_url+'/info', verify=True)
-except requests.exceptions.SSLError as exc:
-    if not insecure:
-        print('Error: the SSL certificate of the server you are connecting to cannot be verified:')
-        print(exc)
-        print('For more information, please refer to https://www.digicert.com/ssl/. If you are absolutely certain of the identity of the server you are connecting to, you can use the --insecure flag to bypass this warning. Exiting...')
-        sys.exit(1)
-    elif insecure:
-        print('Warning: Error: the SSL certificate of the server you are connecting to cannot be verified:')
-        print(exc)
-        print('Running with --insecure flag, ignoring warning...')
-        response = requests.get(base_url+'/info', verify=False)
-upload_chunk_size = response.json()['upload_chunk_size']
-
-
-
-
-
-
-# test output
-write_to_stdout = True
-outprefix = None
-outdir = None
-if args.report:
-    outprefix = os.path.abspath(args.report)
-    outdir = os.path.dirname(outprefix)
-    try:
-        os.makedirs(outdir, exist_ok=True)
-        fout = open(outprefix+".test", "w")
-        fout.write("")
-        fout.close()
-        os.remove(outprefix + ".test")
-        write_to_stdout = False
-    except Exception as e:
-        print("""
-###########
-# WARNING #
-###########
-Unable to write output to specified location. Printing to stdout instead
-""")
-        outprefix = None
-        write_to_stdout = True
-
-WRITE_JSON = args.report_json
-WRITE_TEXT = args.report_text
-QUIET = args.quiet
-
-if not WRITE_JSON and not WRITE_TEXT:
-    WRITE_TEXT = True
-
-
-if debug:
-    print('base_url          : '+base_url)
-    print('username          : '+username)
-    print('apikey            : '+apikey)
-    print('upload_chunk_size : '+str(upload_chunk_size)+' bytes')
-    print('recipients        : '+args.recipients)
-    print('files             : '+','.join(args.files))
-    print('insecure          : '+str(insecure))
 
 ##########################################################################
 
@@ -262,16 +133,11 @@ def call(method, path, data, content=None, rawContent=None, options={}):
 
 
 def postTransfer(user_id, files, recipients, subject=None, message=None, expires=None, options=[]):
-
-
-
     if expires is None:
         expires = round(time.time()) + (default_transfer_days_valid*24*3600)
 
     print(expires)
-
     to = [x.strip() for x in recipients.split(',')]
-
     return call(
         'post',
         '/transfer',
@@ -407,89 +273,369 @@ Files uploaded:
         report_txt += f"""
 {ct_str}: "{f["name"]}"
 {" "*len(ct_str)}  {f["size"]:,} bytes 
-{" "*len(ct_str)}  {url}&files_ids={f["id"]}
+{" "*len(ct_str)}  {url}
 """
 
     return report_txt
 
+# -------------------------------------------------------
+download_script_template = Template("""#!/usr/bin/bash
+
+urls="${url_list}"
+singleurl="${single_url}"
+
+############################################################
+# Help                                                     #
+############################################################
+Help()
+{
+   # Display Help
+   echo "Add description of the script functions here."
+   echo
+   echo "Syntax: fs_download [-h|v|p|n|s]"
+   echo "options:"
+   echo "h     Print this Help."
+   echo "v     Verbose mode."
+   echo "s     Download all data as one single file (zip file by default, use '-a tar' to download as tar)"
+   echo "a     Use with -s, specific archive format (zip|tar)"
+   echo "p     Parallel download individual files (default n=8) using 'xargs'"
+   echo "n     Number of concurrent downloads, default=8"
+   echo "d     Dry-run. Show download commands without executing"
+}
+
+############################################################
+# Parallel_xargs                                           #
+############################################################
+Parallel_xargs()
+{
+    if [ $$dryrun = true  ]; then 
+      echo 'echo $$urls | xargs -n 1 -P '"$${n_parallel}"' wget --content-disposition {}'
+      exit
+    elif [ $$verbose = true ] ; then
+      echo 'echo $$urls | xargs -n 1 -P '"$${n_parallel}"' wget --content-disposition {}'
+    else
+      echo $$urls | xargs -n 1 -P $${n_parallel} wget --content-disposition {}
+    fi
+}
+
+############################################################
+# Single_download                                          #
+############################################################
+SingleArchiveDownload()
+{
+    if [ $$dryrun = true  ]; then 
+      echo "wget --content-disposition \"$${singleurl}&archive_format=$${archive_format}\""
+      exit
+    elif [ $$verbose = true ]; then
+      echo "wget --content-disposition \"$${singleurl}&archive_format=$${archive_format}\""
+    else
+      wget --content-disposition "$${singleurl}&archive_format=$${archive_format}"
+    fi
+}
+
+
+OPTSTRING=":hsvpdn:a:"
+
+mode="help"
+
+n_parallel=8
+verbose=false
+archive_format=zip
+dryrun=false
+
+while getopts $${OPTSTRING} option; do
+    case "$${option}" in
+    h) # display help
+       mode="help";;
+    n) # test
+       n_parallel=$${OPTARG};;
+    v) # verbose
+       verbose=true;;
+    s) # single file
+       mode="single";;
+    p) # parallel download using xargs
+       mode="parallel";;
+    a) # archive_format
+       archive_format=$${OPTARG};;
+    d) # dry-run
+       dryrun=true;;
+    :)
+      echo "Option -$${OPTARG} requires an argument."
+      exit 1 ;;
+   \?) # Invalid option
+       echo "Error: Invalid option $${OPTARG}"
+       exit;;
+    esac
+done
+
+
+case $$mode in 
+  parallel) # parallel download using xargs + wget
+    Parallel_xargs
+    exit;;
+  single) # single file download
+    SingleArchiveDownload
+    exit;;
+  help) # help
+    Help
+    exit;;
+esac
+""")
+# -------------------------------------------------------
+
+
+
+
+# -------------------------------------------------------------------------------
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# settings
+base_url = 'https://filesender.aarnet.edu.au/rest.php'
+default_transfer_days_valid = 21
+username = None
+apikey = None
+homepath = expanduser("~")
+recipients = None
+
+config = configparser.ConfigParser()
+config.read(homepath + '/.filesender/filesender.py.ini')
+if 'system' in config:
+    base_url = config['system'].get(
+        'base_url', 'https://filesender.aarnet.edu.au/rest.php')
+    default_transfer_days_valid = int(
+        config['system'].get('default_transfer_days_valid', 10))
+if 'user' in config:
+    username = config['user'].get('username')
+    apikey = config['user'].get('apikey')
+
+if 'recipients' in config:
+    recipients = config['recipients'].get('recipients')
+
+# argv
+parser = argparse.ArgumentParser()
+parser.add_argument("files", help="path to file(s) to send", nargs='+')
+parser.add_argument("-v", "--verbose", action="store_true")
+parser.add_argument("-i", "--insecure", action="store_true")
+parser.add_argument("-p", "--progress", action="store_true")
+parser.add_argument("-s", "--subject", default="", type=str)
+parser.add_argument("-m", "--message", default="", type=str)
+parser.add_argument("-k", "--skip-email", action="store_true", default=False, help="Don't send email to recipient")
+parser.add_argument("-n", "--n_procs", default=1, type=int, help="number of parallel uploads")
+
+# if we have found these in the config file they become optional arguments
+requiredNamed = parser.add_argument_group('required named arguments')
+if username is None:
+    requiredNamed.add_argument("-u", "--username", required=True)
+else:
+    parser.add_argument("-u", "--username")
+
+if apikey is None:
+    requiredNamed.add_argument("-a", "--apikey", required=True)
+else:
+    parser.add_argument("-a", "--apikey")
+if recipients is None:
+    requiredNamed.add_argument("-r", "--recipients", required=True)
+else:
+    parser.add_argument("-r", "--recipients")
+
+
+# final reporting logs
+parser.add_argument("--report", "-R", type=str, help="filepath for transfer report")
+# reporttype = parser.add_mutually_exclusive_group(required=True)
+parser.add_argument("--report-json", "-j", action="store_true", help="Output transfer report in JSON")
+parser.add_argument("--report-text", "-t", action="store_true", help="Output transfer report in text (default)")
+# parser.add_argument("--report-both", "-b", action="store_true", help="Report both JSON and txt formats")
+parser.add_argument("--quiet", "-q", action="store_true", help="Quiet mode. No report.")
+
+args = parser.parse_args()
+debug = args.verbose
+progress = args.progress
+insecure = args.insecure
+n_procs = args.n_procs
+skip_email = args.skip_email
+
+if args.username is not None:
+    username = args.username
+
+if args.apikey is not None:
+    apikey = args.apikey
+
+if args.recipients is not None:
+    recipients = args.recipients
+
+
+# -------------------------------------------------------------------------------
+
+
+# -------------------------------------------------------------------------------
+# test API, get info
+
+# configs
+try:
+    response = requests.get(base_url+'/info', verify=True)
+except requests.exceptions.SSLError as exc:
+    if not insecure:
+        print('Error: the SSL certificate of the server you are connecting to cannot be verified:')
+        print(exc)
+        print('For more information, please refer to https://www.digicert.com/ssl/. If you are absolutely certain of the identity of the server you are connecting to, you can use the --insecure flag to bypass this warning. Exiting...')
+        sys.exit(1)
+    elif insecure:
+        print('Warning: Error: the SSL certificate of the server you are connecting to cannot be verified:')
+        print(exc)
+        print('Running with --insecure flag, ignoring warning...')
+        response = requests.get(base_url+'/info', verify=False)
+upload_chunk_size = response.json()['upload_chunk_size']
+
+# -------------------------------------------------------------------------------
+# test local file output
+
+write_to_stdout = True
+outprefix = None
+outdir = None
+if args.report:
+    outprefix = os.path.abspath(args.report)
+    outdir = os.path.dirname(outprefix)
+    try:
+        os.makedirs(outdir, exist_ok=True)
+        fout = open(outprefix+".test", "w")
+        fout.write("")
+        fout.close()
+        os.remove(outprefix + ".test")
+        write_to_stdout = False
+    except Exception as e:
+        print("""
+###########
+# WARNING #
+###########
+Unable to write output to specified location. Printing to stdout instead
+""")
+        outprefix = None
+        write_to_stdout = True
+
+WRITE_JSON = args.report_json
+WRITE_TEXT = args.report_text
+QUIET = args.quiet
+
+if not WRITE_JSON and not WRITE_TEXT:
+    WRITE_TEXT = True
+
+# -------------------------------------------------------------------------------
+
+file_list_short_string = ",".join(args.files)
+if len(args.files) > 6:
+    file_list_short_string = ",".join( args.files[:3] ) + "..." + ",".join( args.files[-3:] )
+
+
+if debug:
+    print('base_url          : '+base_url)
+    print('username          : '+username)
+    print('apikey            : '+apikey)
+    print('upload_chunk_size : '+str(upload_chunk_size)+' bytes')
+    print('recipients        : '+recipients)
+    print('files             : '+','.join(args.files))
+    print('insecure          : '+str(insecure))
 
 
 ##########################################################################
 
+# -------------------------------------------------------------------------------
+# Start upload process
 
+SPLIT_LIMIT = 1000
 
+MAX_PER_SPLIT = int(0.95*SPLIT_LIMIT)
 
 # postTransfer
 if debug:
     print('postTransfer')
 
-files = {}
-filesTransfer = []
-for f in args.files:
-    fn_abs = os.path.abspath(f)
-    fn = os.path.basename(fn_abs)
-    size = os.path.getsize(fn_abs)
-
-    files[fn+':'+str(size)] = {
-        'name': fn,
-        'size': size,
-        'path': fn_abs
-    }
-    filesTransfer.append({'name': fn, 'size': size})
-
+n_sets = 1
+if len(args.files) < SPLIT_LIMIT:
+    input_file_list = [args.files]
+else:
+    # split into sets of 0.95*SPLIT_LIMIT files
+    input_file_list = []
+    n_sets = int(len(args.files) / MAX_PER_SPLIT )
+    if n_sets * 950 < len(args.files):
+        n_sets += 1
+    for n in range(n_sets):
+        input_file_list.append(  args.files[n*MAX_PER_SPLIT:(n+1)*MAX_PER_SPLIT]  )
+    
 
 
+# ------------------------
+# now iterate through sets of input_file_list
 
-troptions = {'get_a_link': skip_email}
+Responses = []
 
-# sort by decreasing file size
-filesTransfer = sorted(filesTransfer, key=lambda x: x["size"], reverse=True)
+for file_set in range(n_sets):
+    # get input file list
+    files = {}
+    filesTransfer = []
+    for f in input_file_list[file_set]:
+        fn_abs = os.path.abspath(f)
+        fn = os.path.basename(fn_abs)
+        size = os.path.getsize(fn_abs)
+        files[fn+':'+str(size)] = {
+            'name': fn,
+            'size': size,
+            'path': fn_abs
+        }
+        filesTransfer.append({'name': fn, 'size': size})
 
-transfer = postTransfer(username,
-                        filesTransfer,
-                        args.recipients,
-                        subject=args.subject,
-                        message=args.message,
-                        expires=None,
-                        options=troptions)['created']
-# print(transfer)
+    troptions = {'get_a_link': skip_email}
 
+    # sort by decreasing file size
+    filesTransfer = sorted(filesTransfer, key=lambda x: x["size"], reverse=True)
+    transfer = postTransfer(username,
+                            filesTransfer,
+                            recipients,
+                            subject=args.subject,
+                            message=args.message,
+                            expires=None,
+                            options=troptions)['created']
 
+    # ----------------------------------------------------------------------
+    # transferring data
+    n_procs = min(n_procs, len(filesTransfer))
+    task = partial(upload_file, 
+                transferData=transfer, 
+                filesData=files,
+                upload_chunk_size=upload_chunk_size,
+                debug=debug)
+    pool = Pool(n_procs)
+    pool.map(task, transfer['files'])
+    pool.close()
 
-# ----------------------------------------------------------------------
+    # transferComplete
+    if debug:
+        print('transferComplete')
+    finalResponse = transferComplete(transfer)
+    if progress:
+        print('Upload Complete')
+    Responses.append(finalResponse)
 
-# transferring data
-
-n_procs = min(n_procs, len(filesTransfer))
-
-task = partial(upload_file, 
-               transferData=transfer, 
-               filesData=files,
-               upload_chunk_size=upload_chunk_size,
-               debug=debug)
-
-pool = Pool(n_procs)
-pool.map(task, transfer['files'])
-pool.close()
-
-# transferComplete
-if debug:
-    print('transferComplete')
-finalResponse = transferComplete(transfer)
-if progress:
-    print('Upload Complete')
-
-
-
-
+# --------------------------------------------------
 
 if QUIET:
     exit()
 
-
+# --------------------------------------------------
 if WRITE_TEXT:
-    report_text = transfer_data_to_text(finalResponse)
+    if n_sets == 1:
+        report_text = transfer_data_to_text(Responses[0])
+    elif n_sets > 1:
+        report_text = f"There were more than 1,000 files uploaded, so upload data were split into {n_sets} transfers\n"
 
+        for n in range(n_sets):
+            report_text += f"""
+Set {n+1}:
+
+{transfer_data_to_text(Responses[n])}
+
+-------------------------------
+"""
     if outprefix:
         fout = open(outprefix + ".txt", "w")
         fout.write(report_text)
@@ -502,10 +648,7 @@ if WRITE_TEXT:
 
 {report_text}              
 
-
 """)
-
-
 
 if WRITE_JSON:
     if outprefix:
@@ -523,3 +666,38 @@ if WRITE_JSON:
 
 """)
     
+
+# --------------------------------------------------
+# WRITE DOWNLOAD SCRIPTS
+for n in range(n_sets):
+    if n_sets == 1:
+        download_script = outprefix + ".client_download_script.sh"
+    else:
+        download_script = outprefix + f".client_download_script{n+1}.sh"
+    
+    res = Responses[n]
+    url_list = []
+    single_url = f"https://filesender.aarnet.edu.au/download.php?token={res['recipients'][0]['token']}&files_ids="
+    for fidx, f in enumerate(res["files"]):
+        url = f"https://filesender.aarnet.edu.au/download.php?token={res['recipients'][0]['token']}&files_ids={f['id']}"
+        url_list.append(url)
+        single_url += f"{f['id']}%2C"
+    single_url = single_url[:-3]
+
+    fout = open(download_script, "w")
+    fout.write( download_script_template.substitute(single_url=single_url, url_list=("\n".join(url_list))) )
+    fout.close()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
