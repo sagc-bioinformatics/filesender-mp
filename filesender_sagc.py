@@ -292,7 +292,7 @@ Help()
    # Display Help
    echo "Add description of the script functions here."
    echo
-   echo "Syntax: fs_download [-h|v|p|n|s]"
+   echo "Syntax: client_download_script.sh [-h|v|p|n|s]"
    echo "options:"
    echo "h     Print this Help."
    echo "v     Verbose mode."
@@ -301,6 +301,16 @@ Help()
    echo "p     Parallel download individual files (default n=8) using 'xargs'"
    echo "n     Number of concurrent downloads, default=8"
    echo "d     Dry-run. Show download commands without executing"
+   echo
+   echo "Example 1: Download individual files in parallel, with 6 concurrent downloads"
+   echo "./client_download_script.sh -p -n 6"
+   echo 
+   echo "Example 2: Download all files combined into a single zip file"
+   echo "./client_download_script.sh -s"
+   echo 
+   echo "Example 3: Download all files combined into a single tar file"
+   echo "./client_download_script.sh -s -a tar"
+   echo
 }
 
 ############################################################
