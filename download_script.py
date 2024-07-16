@@ -23,26 +23,48 @@ class MyHTMLParser(HTMLParser):
         self.capture_data = False
         self.target_class = ""
         self.captured_data = []
+        self.file_ids = []
+
+    # def handle_starttag(self, tag, attrs):
+    #     if tag == "span":
+    #         for attr in attrs:
+    #             if attr[0] == "class" and attr[1] == self.target_class:
+    #                 self.capture_data = True
+
+    # def handle_endtag(self, tag):
+    #     if tag == "span" and self.capture_data:
+    #         self.capture_data = False
 
     def handle_starttag(self, tag, attrs):
-        if tag == "span":
+        if tag == "tr":
             for attr in attrs:
-                if attr[0] == "class" and attr[1] == self.target_class:
+                if attr[0] == self.target_class:
+                    print(attr[0], attr[1])
+                    self.file_ids.append(attr[1])
                     self.capture_data = True
 
     def handle_endtag(self, tag):
-        if tag == "span" and self.capture_data:
+        if tag == "tr" and self.capture_data:
             self.capture_data = False
 
     def handle_data(self, data):
         if self.capture_data:
             self.captured_data.append(data)
 
-    def extract_span_by_class(self, html, class_value):
-        self.target_class = class_value
+    # def extract_span_by_class(self, html, class_value):
+    #     self.target_class = class_value
+    #     self.captured_data = []
+    #     self.feed(html)
+    #     # return self.captured_data
+    #     return self.file_ids
+
+    def extract_tr_by_attr(self, html):
+        self.target_class = "data-id"
         self.captured_data = []
         self.feed(html)
-        return self.captured_data
+        # return self.captured_data
+        return self.file_ids
+
 
 
 
@@ -69,10 +91,18 @@ class FileSenderDownload:
         self.archive_format = archive_format
         self.html_content = download_html(url)
         parser = MyHTMLParser()
-        self.directlinks = parser.extract_span_by_class(self.html_content, "directlink")
-        self.directlinks = [x.split("Direct Link: ")[1].strip() for x in self.directlinks]
+
         self.token = url.split("&token=")[1]
-        self.fileids = [x.split("&files_ids=")[1] for x in self.directlinks]
+        print(self.token)
+
+#        self.directlinks = parser.extract_span_by_class(self.html_content, "directlink")
+#        self.directlinks = [x.split("Direct Link: ")[1].strip() for x in self.directlinks]
+#        self.fileids = [x.split("&files_ids=")[1] for x in self.directlinks]
+        self.fileids = parser.extract_tr_by_attr(self.html_content)
+        baseurl = "https://filesender.aarnet.edu.au/download.php"
+        print(self.fileids)
+        self.directlinks = [ f"{baseurl}?token={self.token}&files_ids={x}" for x in self.fileids ]
+        print(self.directlinks)
 
     def single_archive_link(self):
         base_url = "https://filesender.aarnet.edu.au/download.php?"
@@ -82,6 +112,7 @@ class FileSenderDownload:
 if __name__=="__main__":
     args = handle_args()
     OUTDIR=args.outdir
+
     fsdownload=FileSenderDownload(args.url, archive_format=args.single)
     if args.single:
         print(f"downloading a single {args.single} file")
