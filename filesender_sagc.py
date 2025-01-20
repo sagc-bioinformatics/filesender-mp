@@ -41,9 +41,10 @@ try:
     import json
     import configparser
     from os.path import expanduser
-    from multiprocessing import Pool
+    from multiprocessing import Pool, Manager
     from functools import partial
     from string import Template
+    import sys
 except Exception as e:
     print(type(e))
     print(e.args)
@@ -201,40 +202,89 @@ def deleteTransfer(transfer):
     )
 
 ##########################################################################
+from multiprocessing import current_process
 
-def upload_file( fileobject, transferData, filesData, upload_chunk_size, debug):
-    """This is the mp worker that replaces the last "try" block in the original script
-    """
+def update_status(path, status):
+    with status_lock:
+        for i, (existing_path, _) in enumerate(file_statuses):
+            if existing_path == path:
+                file_statuses[i] = (path, status)
+                break
+        else:
+            file_statuses.append((path, status))
+
+def print_all_statuses():
+    with status_lock:
+        # Move cursor to the beginning of the line
+        sys.stdout.write('\r')
+        
+        # Print all statuses
+        for i, (p, s) in enumerate(file_statuses):
+            if i > 0:
+                sys.stdout.write('\n')
+            sys.stdout.write(f"{p}: {s}")
+            sys.stdout.write('\033[K')  # Clear to the end of the line
+        
+        sys.stdout.flush()
+        
+        # Move cursor back up to the start of the status block
+        if len(file_statuses) > 1:
+            sys.stdout.write(f'\033[{len(file_statuses) - 1}A')
+        
+        sys.stdout.flush()
+
+# Status printer function
+def status_printer():
+    while True:
+        print_all_statuses()
+        time.sleep(1)  # Update every second
+
+# Status printer function
+def print_status():
+        print_all_statuses()
+
+def upload_file(fileobject, transferData, filesData, upload_chunk_size, debug):
     fname = fileobject["name"]
     fsize = fileobject["size"]
     fstring = f"{fname}:{fsize}"
-    fpath = filesData[fstring]["path"]
+    # fpath = filesData[fstring]["path"]
+    fpath = os.path.basename(filesData[fstring]["path"])
 
     try:
-        # putChunks
-        if debug:
-            print('putChunks: '+fpath)
         with open(fpath, mode='rb', buffering=0) as fin:
             chunk_count = 0
             for offset in range(0, fsize, upload_chunk_size):
+                
+                # Get the current process name
+                current_process_name = current_process().name
+
+                # Get the current process index/pid
+                current_process_pid = current_process().pid
+                
                 if progress:
-                    print('Uploading: '+fpath+' '+str(offset)+'-'+str(min(offset +
-                        upload_chunk_size, fsize))+' '+str(round(offset/fsize*100))+'%')
+                    status = f'Uploading: {offset}-{min(offset + upload_chunk_size, fsize)} {round(offset/fsize*100)}%'
+                    update_status(fpath, status)
+                
                 data = fin.read(upload_chunk_size)
-                # print(data)
                 putChunk(transferData, fileobject, data, offset)
                 if debug:
                     chunk_count += 1
-                    print(f"uploaded {chunk_count} chunks")
-        # file complete
-        if debug:
-            print('fileComplete: '+fpath)
-        fileComplete(transferData, fileobject)
-        if progress:
-            print('Uploading: '+fpath+' '+str(size)+' 100%')
-    except Exception as e:
-        raise(e)
+                    update_status(fpath, f"uploaded {chunk_count} chunks")
 
+                if current_process().name == "ForkPoolWorker-2":
+                    print_status()
+        
+        if debug:
+            update_status(fpath, f"fileComplete: {chunk_count} chunks")
+        
+        fileComplete(transferData, fileobject)
+        
+        if progress:
+            update_status(fpath, f'Uploading: {fsize} 100%')
+
+    except Exception as e:
+        update_status(fpath, f'Error: {str(e)}')
+        raise(e)
 
 def transfer_data_to_text(tdata):
     total_size = 0
@@ -277,7 +327,6 @@ Files uploaded:
 """
 
     return report_txt
-
 
 
 # -------------------------------------------------------------------------------
@@ -463,6 +512,11 @@ else:
 
 Responses = []
 
+# Global list to store file statuses
+manager = Manager()
+file_statuses = manager.list()
+status_lock = manager.Lock()
+
 for file_set in range(n_sets):
     # get input file list
     files = {}
@@ -501,6 +555,10 @@ for file_set in range(n_sets):
     pool = Pool(n_procs)
     pool.map(task, transfer['files'])
     pool.close()
+    pool.join()  # Wait for all uploads to complete
+
+    # Stop the status printer
+    status_thread.join(timeout=1)
 
     # transferComplete
     if debug:
@@ -509,6 +567,13 @@ for file_set in range(n_sets):
     if progress:
         print('Upload Complete')
     Responses.append(finalResponse)
+
+    # Clear the file_statuses for the next set
+    with status_lock:
+        file_statuses[:] = []
+
+# Final status print after all sets are complete
+print_all_statuses()
 
 # --------------------------------------------------
 
