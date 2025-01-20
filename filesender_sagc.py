@@ -557,9 +557,6 @@ for file_set in range(n_sets):
     pool.close()
     pool.join()  # Wait for all uploads to complete
 
-    # Stop the status printer
-    status_thread.join(timeout=1)
-
     # transferComplete
     if debug:
         print('transferComplete')
