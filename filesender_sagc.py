@@ -204,8 +204,7 @@ def deleteTransfer(transfer):
 ##########################################################################
 from multiprocessing import current_process
 
-def update_status(fpath, status):
-    path = os.path.basename(filesData[fstring]["fpath"])
+def update_status(path, status):
     with status_lock:
         for i, (existing_path, _) in enumerate(file_statuses):
             if existing_path == path:
@@ -249,6 +248,7 @@ def upload_file(fileobject, transferData, filesData, upload_chunk_size, debug):
     fsize = fileobject["size"]
     fstring = f"{fname}:{fsize}"
     fpath = filesData[fstring]["path"]
+    basefpath = os.path.basename(filesData[fstring]["path"])
 
     try:
         with open(fpath, mode='rb', buffering=0) as fin:
@@ -263,27 +263,27 @@ def upload_file(fileobject, transferData, filesData, upload_chunk_size, debug):
                 
                 if progress:
                     status = f'Uploading: {offset}-{min(offset + upload_chunk_size, fsize)} {round(offset/fsize*100)}%'
-                    update_status(fpath, status)
+                    update_status(basefpath, status)
                 
                 data = fin.read(upload_chunk_size)
                 putChunk(transferData, fileobject, data, offset)
                 if debug:
                     chunk_count += 1
-                    update_status(fpath, f"uploaded {chunk_count} chunks")
+                    update_status(basefpath, f"uploaded {chunk_count} chunks")
 
                 if current_process().name == "ForkPoolWorker-2":
                     print_status()
         
         if debug:
-            update_status(fpath, f"fileComplete: {chunk_count} chunks")
+            update_status(basefpath, f"fileComplete: {chunk_count} chunks")
         
         fileComplete(transferData, fileobject)
         
         if progress:
-            update_status(fpath, f'Uploading: {fsize} 100%')
+            update_status(basefpath, f'Uploading: {fsize} 100%')
 
     except Exception as e:
-        update_status(fpath, f'Error: {str(e)}')
+        update_status(basefpath, f'Error: {str(e)}')
         raise(e)
 
 def transfer_data_to_text(tdata):
