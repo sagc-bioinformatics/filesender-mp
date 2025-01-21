@@ -205,7 +205,7 @@ def deleteTransfer(transfer):
 from multiprocessing import current_process
 
 def update_status(fpath, status):
-    path = os.path.basename(filesData[fstring][fpath])
+    path = os.path.basename(filesData[fstring]["fpath"])
     with status_lock:
         for i, (existing_path, _) in enumerate(file_statuses):
             if existing_path == path:
