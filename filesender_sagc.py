@@ -204,7 +204,8 @@ def deleteTransfer(transfer):
 ##########################################################################
 from multiprocessing import current_process
 
-def update_status(path, status):
+def update_status(fpath, status):
+    path = os.path.basename(filesData[fstring][fpath])
     with status_lock:
         for i, (existing_path, _) in enumerate(file_statuses):
             if existing_path == path:
@@ -247,8 +248,7 @@ def upload_file(fileobject, transferData, filesData, upload_chunk_size, debug):
     fname = fileobject["name"]
     fsize = fileobject["size"]
     fstring = f"{fname}:{fsize}"
-    # fpath = filesData[fstring]["path"]
-    fpath = os.path.basename(filesData[fstring]["path"])
+    fpath = filesData[fstring]["path"]
 
     try:
         with open(fpath, mode='rb', buffering=0) as fin:
