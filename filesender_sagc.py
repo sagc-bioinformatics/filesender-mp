@@ -215,23 +215,29 @@ def update_status(path, status):
 
 def print_all_statuses():
     with status_lock:
-        # Move cursor to the beginning of the line
-        sys.stdout.write('\r')
+        # Move cursor up to the start of the status block (if not first print)
+        if hasattr(print_all_statuses, 'lines_printed'):
+            lines_to_move = print_all_statuses.lines_printed + 4
+            if lines_to_move > 0:
+                sys.stdout.write(f'\033[{lines_to_move}A')
+        else:
+            print_all_statuses.lines_printed = 0
         
+        sys.stdout.write('\033[K\n')
+        sys.stdout.write(f'|=============================|\033[K\n')
+        sys.stdout.write(f'|     FILESENDER PROGRESS     |\033[K\n')
+        sys.stdout.write(f'|=============================|\033[K\n')
+
         # Print all statuses
         for i, (p, s) in enumerate(file_statuses):
-            if i > 0:
-                sys.stdout.write('\n')
+            sys.stdout.write('\r')  # Move to start of line
             sys.stdout.write(f"{p}: {s}")
-            sys.stdout.write('\033[K')  # Clear to the end of the line
-        
+            sys.stdout.write('\033[K')  # Clear to end of line
+            sys.stdout.write('\n')
         sys.stdout.flush()
-        
-        # Move cursor back up to the start of the status block
-        if len(file_statuses) > 1:
-            sys.stdout.write(f'\033[{len(file_statuses) - 1}A')
-        
-        sys.stdout.flush()
+
+        # Store how many lines were printed for next time
+        print_all_statuses.lines_printed = len(file_statuses)
 
 # Status printer function
 def status_printer():
