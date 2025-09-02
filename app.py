@@ -59,7 +59,7 @@ URL should start with https://filesender.aarnet.edu.au/?s=download
                 options=("zip", "tar"))
         
         with col3:
-            command_option = st.radio("Download command", options=("wget", "curl"))
+            command_option = st.radio("Download command", options=("curl", "wget"))
 
         st.markdown("<hr width=80%/>", unsafe_allow_html=True)
         
@@ -71,14 +71,17 @@ URL should start with https://filesender.aarnet.edu.au/?s=download
             if command_option=="wget":
                 st.code(f"wget --content-disposition \"{download_url}\"", language="bash")
             elif command_option =="curl":
-                st.write("Not yet available")
+                st.code(f"curl -L -C - -o filesender_transfer_{fs.token[0:8]}.{archive_format} \"{download_url}\"", language="bash")
         elif download_option == ParallelOption:
-            urls = "\n".join(fsd.directlinks)
+            filenames = "\n".join([ x[0] for x in fsd.name_links])
+            urls = "\n".join([ x[1] for x in fsd.name_links])
 
             st.write("""
 Better to copy and paste the content into a script and then execute the script.
 
 But you _should_ be able to just copy and paste into a BASH terminal to run the command as well.
+
+Please note, only the multiple parallel download with curl is capable of resuming a partial download, so this is the recommended method.
 """)
 
             if command_option=="wget":
@@ -87,16 +90,18 @@ But you _should_ be able to just copy and paste into a BASH terminal to run the 
                     
 urls="{urls}"
 
-echo $urls | xargs -n 1 -P {parallel_n} wget --content-disposition {{}}
+paste <(printf "%s\\n" "${{filenames[@]}}") <(printf "%s\\n" "${{urls[@]}}") |\\
+    xargs -n 2 -P {parallel_n} sh -c 'wget --content-disposition "$2"' _
 
-""")
+""", language="bash")
             elif command_option=="curl":
-                st.write("Not yet available")
-#                  st.code(f"""
-# #!/usr/bin/bash
+                st.code(f"""
+#!/usr/bin/bash
                     
-# urls="{urls}"
+urls="{urls}"
+filenames="{filenames}"
 
-# echo $urls | xargs -n 1 -P {parallel_n} curl -J -O {{}}
+paste <(printf "%s\\n" "${{filenames[@]}}") <(printf "%s\\n" "${{urls[@]}}") |\\
+    xargs -n 2 -P {parallel_n} sh -c 'curl -L -C - -o "$1" "$2"' _
 
-# """)
+""", language="bash")

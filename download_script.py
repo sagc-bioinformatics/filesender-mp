@@ -21,27 +21,21 @@ class MyHTMLParser(HTMLParser):
     def __init__(self):
         super().__init__()
         self.capture_data = False
-        self.target_class = ""
         self.captured_data = []
-        self.file_ids = []
-
-    # def handle_starttag(self, tag, attrs):
-    #     if tag == "span":
-    #         for attr in attrs:
-    #             if attr[0] == "class" and attr[1] == self.target_class:
-    #                 self.capture_data = True
-
-    # def handle_endtag(self, tag):
-    #     if tag == "span" and self.capture_data:
-    #         self.capture_data = False
+        self.filename_ids = []
 
     def handle_starttag(self, tag, attrs):
         if tag == "tr":
-            for attr in attrs:
-                if attr[0] == self.target_class:
-                    print(attr[0], attr[1])
-                    self.file_ids.append(attr[1])
-                    self.capture_data = True
+            attr_dict = dict(attrs)
+
+            # Look for data-name and data-id
+            name = attr_dict.get("data-name")
+            file_id = attr_dict.get("data-id")
+
+            if name and file_id:
+                # Store tuple (name, id)
+                self.filename_ids.append((name, file_id))
+                self.capture_data = True
 
     def handle_endtag(self, tag):
         if tag == "tr" and self.capture_data:
@@ -51,19 +45,11 @@ class MyHTMLParser(HTMLParser):
         if self.capture_data:
             self.captured_data.append(data)
 
-    # def extract_span_by_class(self, html, class_value):
-    #     self.target_class = class_value
-    #     self.captured_data = []
-    #     self.feed(html)
-    #     # return self.captured_data
-    #     return self.file_ids
-
     def extract_tr_by_attr(self, html):
-        self.target_class = "data-id"
         self.captured_data = []
+        self.filename_ids = []  # reset on each run
         self.feed(html)
-        # return self.captured_data
-        return self.file_ids
+        return self.filename_ids
 
 
 
@@ -80,7 +66,7 @@ def handle_args():
     return p.parse_args()
 
 OUTDIR="./"
-def download_url(url):
+def download_url(name, url):
     print(f"downloading {url}")
     wget_cmd = f"wget -P {OUTDIR} --content-disposition \"{url}\""
     wget_proc = subprocess.Popen(wget_cmd, shell=True)
@@ -93,20 +79,17 @@ class FileSenderDownload:
         parser = MyHTMLParser()
 
         self.token = url.split("&token=")[1]
-        print(self.token)
 
 #        self.directlinks = parser.extract_span_by_class(self.html_content, "directlink")
 #        self.directlinks = [x.split("Direct Link: ")[1].strip() for x in self.directlinks]
 #        self.fileids = [x.split("&files_ids=")[1] for x in self.directlinks]
         self.fileids = parser.extract_tr_by_attr(self.html_content)
         baseurl = "https://filesender.aarnet.edu.au/download.php"
-        print(self.fileids)
-        self.directlinks = [ f"{baseurl}?token={self.token}&files_ids={x}" for x in self.fileids ]
-        print(self.directlinks)
+        self.name_links = [ (x[0], f"{baseurl}?token={self.token}&files_ids={x[1]}") for x in self.fileids ]
 
     def single_archive_link(self):
         base_url = "https://filesender.aarnet.edu.au/download.php?"
-        base_url += f"token={self.token}&files_ids={'%2C'.join(self.fileids)}&archive_format={self.archive_format}"
+        base_url += f"token={self.token}&files_ids={'%2C'.join([x[1] for x in self.fileids])}&archive_format={self.archive_format}"
         return base_url
 
 if __name__=="__main__":
@@ -123,11 +106,11 @@ if __name__=="__main__":
         if args.parallel < 1:
             raise ValueError("--parallel value must be positive integer")
         elif args.parallel == 1:
-            for url_ in fsdownload.directlinks:
-                download_url(url_)
+            for name, url in fsdownload.name_links:
+                download_url(name, url)
         else:
             pool = Pool(args.parallel)
-            pool.map(download_url, fsdownload.directlinks)
+            pool.map(download_url, fsdownload.name_links)
         
 
 
